@@ -18,9 +18,17 @@
 #define PORT "3490" // the port users will be connecting to
 #define BACKLOG 10 // how many pending connections queue will hold
 
+int send_to_new_fd(int new_fd);
+
+
 void sigchld_handler(int s)
 {
-	// waitpid() might overwrite errno, so we save and restore it:
+	/*
+		Remember that errno is a global int that is modified by functions whenever
+		an error occurs. With that in mind, we don't want the waitpid() function to
+		overwrite our errno, and we aren't going to analyze it for any useful data
+		within this particular function, and so we'll simply save and restore it.
+	*/
 	int saved_errno = errno;
 	while(waitpid(-1, NULL, WNOHANG) > 0);
 	errno = saved_errno;
@@ -29,22 +37,53 @@ void sigchld_handler(int s)
 // get sockaddr, IPv4 or IPv6:
 void *get_in_addr(struct sockaddr *sa)
 {
+	/*
+		If it turns out that sa_family within the struct sa equals AF_INET, that means
+		we are dealing with an IPv4 address. With that in mind, we'll simply return the
+		IPv4 address that corresponds to the value we had passed. Note that we have to
+		cast the data types appropriately.
+	*/
 	if (sa->sa_family == AF_INET)
 	{
 		return &(((struct sockaddr_in*)sa)->sin_addr);
 	}
+	/*
+		Otherwise, this is actually an AF_INET6 address, or IPv6. With that in mind, we'll
+		cast sockaddr *sa to a sockaddr_in6 * and then we'll pull the appropriate data.
+	*/
 	return &(((struct sockaddr_in6*)sa)->sin6_addr);
 }
 
 int main(void)
 {
+	/*
+		We're going to create two new file descriptors, represented as ints.
+		The first one is called sockfd, and will be used to listen to new connections.
+		The second one is new_fd, and will be assigned to whatever socket we create in order
+		to communicate with the appropriate client.
+	*/
+
 	int sockfd, new_fd; // listen on sock_fd, new connection on new_fd
+
+	/*
+		struct addrinfo hints will contain the socket configuration information, such as the ai_family,
+		the ai_socktype, and the ai_flags. This will eventually be passed to getaddrinfo() so that 
+	*/
+
 	struct addrinfo hints, *servinfo, *p;
+
+
 	struct sockaddr_storage their_addr; // connector's address information
 	socklen_t sin_size;
 	struct sigaction sa;
+	
+	// The variable yes is also quite interesting. Yes always equals one. Huh.
 	int yes=1;
+
+	// This variable is solely used to print out IP addresses when they are found. It's just a string, haha.
 	char s[INET6_ADDRSTRLEN];
+
+	// Um... okay?
 	int rv;
 
 
@@ -108,23 +147,53 @@ int main(void)
 
  	while(1)
  	{ // main accept() loop
-		sin_size = sizeof their_addr;
+
+ 		/*
+			Remember that their_addr is of type sockaddr_storage, which effectively should be padded to be the same
+			size as the typical sockaddr. Notice how we cast it to the appropriate pointer when we call it in the
+			accept() function for int new_fd.
+ 		*/
+
+		sin_size = sizeof(their_addr);
+
+		/*
+			The new_fd will be any number other than -1 when a connection is actually accepted. Note that in any other
+			case, their_addr is never modified. We only care to update their_addr if it turns out that there's a, well,
+			new address. Besides, before useful information is even used with it, it will simply be fork()'d off anyways.
+
+			Note: from this point on, new_fd is the socket that points to the remote computer. We are connected!
+		*/
 		new_fd = accept(sockfd, (struct sockaddr *)&their_addr, &sin_size);
+
 		if (new_fd == -1)
 		{
+			/*
+				perror() will return the following statement:printf("server: got connection from %s\n", s);
+				accept: (whatever the error is).
+
+				Note that the accept() method will modify errorno and the appropriate error message.
+			*/
+
 			perror("accept");
 			continue;
 		}
-	
+		
+		/*
+			If we have reached this point-- congrats, you have received a connection from somewhere!
+			
+			inet_ntop() is used to convert IPv4 and IPv6 addresses from binary to text form.
+			It will save the resulting string into char[] s, and write sizeof(s) many characters.
+		*/
+		inet_ntop(their_addr.ss_family, get_in_addr((struct sockaddr *)&their_addr), s, sizeof(s));
 
-		inet_ntop(their_addr.ss_family, get_in_addr((struct sockaddr *)&their_addr), s, sizeof s);
+		// Prints out the IP address.
 	 	printf("server: got connection from %s\n", s);
 
 	 	if (!fork())
 	 	{ // this is the child process
 			close(sockfd); // child doesn't need the listener
-			if (send(new_fd, "Hello, world!", 13, 0) == -1)
-				perror("send");
+			int i = 0;
+			send_to_new_fd(new_fd);
 			close(new_fd);
 			exit(0);
 		}
@@ -136,6 +205,19 @@ int main(void)
 
 
 
+int send_to_new_fd(int new_fd)
+{
+	char message[100];
+	while (1)
+	{
+		memset(message,0,sizeof(message));
+		fgets(message, 100, stdin);
+		if (send(new_fd, message, 100, 0) == -1)
+			perror("send");
+	}
+
+	return 0;
+}
 
 
 
